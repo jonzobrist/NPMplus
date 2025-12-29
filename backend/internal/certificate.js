@@ -764,8 +764,11 @@ const internalCertificate = {
 		const credentialsLocation = `/tmp/certbot-credentials/credentials-${certificate.id}`;
 		fs.writeFileSync(credentialsLocation, certificate.meta.dns_provider_credentials, { mode: 0o600 });
 
+		// Route 53 requires special handling - it doesn't support --dns-route53-credentials argument
+		const isRoute53 = certificate.meta.dns_provider === "route53";
+
 		try {
-			const result = await utils.execFile("certbot", [
+			const args = [
 				"--config",
 				"/etc/certbot.ini",
 				"certonly",
@@ -778,13 +781,22 @@ const internalCertificate = {
 				...(certificate.meta.reuse_key ? ["--reuse-key"] : ["--no-reuse-key"]),
 				"--authenticator",
 				dnsPlugin.full_plugin_name,
-				`--${dnsPlugin.full_plugin_name}-credentials`,
-				credentialsLocation,
-				...(certificate.meta.propagation_seconds !== undefined
-					? [`--${dnsPlugin.full_plugin_name}-propagation-seconds`]
-					: []),
-				...(certificate.meta.propagation_seconds !== undefined ? [certificate.meta.propagation_seconds] : []),
-			]);
+			];
+
+			// Add credentials argument for all providers except Route 53
+			if (!isRoute53) {
+				args.push(`--${dnsPlugin.full_plugin_name}-credentials`, credentialsLocation);
+			}
+
+			// Add propagation seconds if specified
+			if (certificate.meta.propagation_seconds !== undefined) {
+				args.push(`--${dnsPlugin.full_plugin_name}-propagation-seconds`, certificate.meta.propagation_seconds);
+			}
+
+			// For Route 53, pass credentials via AWS_CONFIG_FILE environment variable
+			const execOptions = isRoute53 ? { env: { AWS_CONFIG_FILE: credentialsLocation } } : {};
+
+			const result = await utils.execFile("certbot", args, execOptions);
 			logger.info(result);
 			return result;
 		} catch (err) {
@@ -887,6 +899,15 @@ const internalCertificate = {
 			`Renewing LetsEncrypt certificates via ${dnsPlugin.name} for Cert #${certificate.id}: ${certificate.domain_names.join(", ")}`,
 		);
 
+		// Route 53 requires credentials via environment variable
+		const isRoute53 = certificate.meta.dns_provider === "route53";
+		const credentialsLocation = `/tmp/certbot-credentials/credentials-${certificate.id}`;
+
+		if (isRoute53) {
+			// Write credentials file for Route 53
+			fs.writeFileSync(credentialsLocation, certificate.meta.dns_provider_credentials, { mode: 0o600 });
+		}
+
 		try {
 			const revokeResult = await utils.execFile("certbot", [
 				"--config",
@@ -903,18 +924,31 @@ const internalCertificate = {
 			// do nothing
 		}
 
-		const renewResult = await utils.execFile("certbot", [
-			"--config",
-			"/etc/certbot.ini",
-			"renew",
-			"--server",
-			process.env.ACME_SERVER,
-			"--cert-name",
-			`npm-${certificate.id}`,
-			"--new-key",
-			"--force-renewal",
-		]);
+		// For Route 53, pass credentials via AWS_CONFIG_FILE environment variable
+		const execOptions = isRoute53 ? { env: { AWS_CONFIG_FILE: credentialsLocation } } : {};
+
+		const renewResult = await utils.execFile(
+			"certbot",
+			[
+				"--config",
+				"/etc/certbot.ini",
+				"renew",
+				"--server",
+				process.env.ACME_SERVER,
+				"--cert-name",
+				`npm-${certificate.id}`,
+				"--new-key",
+				"--force-renewal",
+			],
+			execOptions,
+		);
 		logger.info(renewResult);
+
+		// Clean up credentials file for Route 53
+		if (isRoute53) {
+			fs.unlink(credentialsLocation, () => {});
+		}
+
 		return renewResult;
 	},
 

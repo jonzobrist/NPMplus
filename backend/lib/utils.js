@@ -29,13 +29,16 @@ const writeHash = () => {
 /**
  * @param   {String} cmd
  * @param   {Array}  args
+ * @param   {Object} [options] - Optional options object
+ * @param   {Object} [options.env] - Optional environment variables
  * @returns {Promise}
  */
-const execFile = (cmd, args) => {
+const execFile = (cmd, args, options = {}) => {
 	debug(logger, `CMD: ${cmd} ${args ? args.join(" ") : ""}`);
 
 	return new Promise((resolve, reject) => {
-		nodeExecFile(cmd, args, (err, stdout, stderr) => {
+		const execOptions = options.env ? { env: { ...process.env, ...options.env } } : {};
+		nodeExecFile(cmd, args, execOptions, (err, stdout, stderr) => {
 			if (err && typeof err === "object") {
 				reject(new errs.CommandError((stdout + stderr).trim(), 1, err));
 			} else {
