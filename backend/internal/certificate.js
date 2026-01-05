@@ -793,11 +793,19 @@ const internalCertificate = {
 				args.push(`--${dnsPlugin.full_plugin_name}-propagation-seconds`, certificate.meta.propagation_seconds);
 			}
 
-		// For Route 53, parse credentials and pass as environment variables
-		const execOptions = isRoute53 ? { env: {
-			AWS_ACCESS_KEY_ID: certificate.meta.dns_provider_credentials.match(/aws_access_key_id\s*=\s*(.+)/)[1].trim(),
-			AWS_SECRET_ACCESS_KEY: certificate.meta.dns_provider_credentials.match(/aws_secret_access_key\s*=\s*(.+)/)[1].trim()
-		} } : {};
+			// For Route 53, parse credentials and pass as environment variables
+			const execOptions = isRoute53
+				? {
+						env: {
+							AWS_ACCESS_KEY_ID: certificate.meta.dns_provider_credentials
+								.match(/aws_access_key_id\s*=\s*(.+)/)[1]
+								.trim(),
+							AWS_SECRET_ACCESS_KEY: certificate.meta.dns_provider_credentials
+								.match(/aws_secret_access_key\s*=\s*(.+)/)[1]
+								.trim(),
+						},
+					}
+				: {};
 
 			const result = await utils.execFile("certbot", args, execOptions);
 			logger.info(result);
@@ -922,11 +930,11 @@ const internalCertificate = {
 			const credentials = certWithCredentials.meta.dns_provider_credentials;
 			const accessKeyMatch = credentials.match(/aws_access_key_id\s*=\s*(.+)/);
 			const secretKeyMatch = credentials.match(/aws_secret_access_key\s*=\s*(.+)/);
-	
+
 			if (!accessKeyMatch || !secretKeyMatch) {
 				throw Error("Invalid Route 53 credentials format");
 			}
-	
+
 			route53Env = {
 				AWS_ACCESS_KEY_ID: accessKeyMatch[1].trim(),
 				AWS_SECRET_ACCESS_KEY: secretKeyMatch[1].trim(),
@@ -968,7 +976,6 @@ const internalCertificate = {
 			execOptions,
 		);
 		logger.info(renewResult);
-
 
 		return renewResult;
 	},
