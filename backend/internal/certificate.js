@@ -793,8 +793,11 @@ const internalCertificate = {
 				args.push(`--${dnsPlugin.full_plugin_name}-propagation-seconds`, certificate.meta.propagation_seconds);
 			}
 
-			// For Route 53, pass credentials via AWS_CONFIG_FILE environment variable
-			const execOptions = isRoute53 ? { env: { AWS_CONFIG_FILE: credentialsLocation } } : {};
+		// For Route 53, parse credentials and pass as environment variables
+		const execOptions = isRoute53 ? { env: {
+			AWS_ACCESS_KEY_ID: certificate.meta.dns_provider_credentials.match(/aws_access_key_id\s*=\s*(.+)/)[1].trim(),
+			AWS_SECRET_ACCESS_KEY: certificate.meta.dns_provider_credentials.match(/aws_secret_access_key\s*=\s*(.+)/)[1].trim()
+		} } : {};
 
 			const result = await utils.execFile("certbot", args, execOptions);
 			logger.info(result);
@@ -899,13 +902,35 @@ const internalCertificate = {
 			`Renewing LetsEncrypt certificates via ${dnsPlugin.name} for Cert #${certificate.id}: ${certificate.domain_names.join(", ")}`,
 		);
 
-		// Route 53 requires credentials via environment variable
+		// Route 53 requires credentials via environment variables
 		const isRoute53 = certificate.meta.dns_provider === "route53";
-		const credentialsLocation = `/tmp/certbot-credentials/credentials-${certificate.id}`;
+		let route53Env = {};
 
 		if (isRoute53) {
-			// Write credentials file for Route 53
-			fs.writeFileSync(credentialsLocation, certificate.meta.dns_provider_credentials, { mode: 0o600 });
+			// Fetch credentials from database (they're omitted from the certificate object)
+			const certWithCredentials = await certificateModel
+				.query()
+				.select("meta")
+				.where("id", certificate.id)
+				.first();
+
+			if (!certWithCredentials?.meta?.dns_provider_credentials) {
+				throw Error("Route 53 credentials not found in database");
+			}
+
+			// Parse AWS credentials from INI format and pass as environment variables
+			const credentials = certWithCredentials.meta.dns_provider_credentials;
+			const accessKeyMatch = credentials.match(/aws_access_key_id\s*=\s*(.+)/);
+			const secretKeyMatch = credentials.match(/aws_secret_access_key\s*=\s*(.+)/);
+	
+			if (!accessKeyMatch || !secretKeyMatch) {
+				throw Error("Invalid Route 53 credentials format");
+			}
+	
+			route53Env = {
+				AWS_ACCESS_KEY_ID: accessKeyMatch[1].trim(),
+				AWS_SECRET_ACCESS_KEY: secretKeyMatch[1].trim(),
+			};
 		}
 
 		try {
@@ -924,8 +949,8 @@ const internalCertificate = {
 			// do nothing
 		}
 
-		// For Route 53, pass credentials via AWS_CONFIG_FILE environment variable
-		const execOptions = isRoute53 ? { env: { AWS_CONFIG_FILE: credentialsLocation } } : {};
+		// For Route 53, pass AWS credentials as environment variables
+		const execOptions = isRoute53 ? { env: route53Env } : {};
 
 		const renewResult = await utils.execFile(
 			"certbot",
@@ -944,10 +969,6 @@ const internalCertificate = {
 		);
 		logger.info(renewResult);
 
-		// Clean up credentials file for Route 53
-		if (isRoute53) {
-			fs.unlink(credentialsLocation, () => {});
-		}
 
 		return renewResult;
 	},
